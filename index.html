@@ -1,4 +1,3 @@
-// index.html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,6 +52,16 @@
         .success {
             color: green;
         }
+        #controls {
+            position: fixed;
+            top: 70px;
+            right: 10px;
+            padding: 8px;
+            background-color: white;
+            border-radius: 4px;
+            z-index: 1000;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
     </style>
 </head>
 <body>
@@ -63,6 +72,11 @@
         <div id="map"></div>
         <div id="status">Status: <span id="status-text">Initializing...</span></div>
         <div id="coordinates">Coordinates: <span id="coord-text">Waiting...</span></div>
+        <div id="controls">
+            <label>
+                <input type="checkbox" id="share-location"> Share Location
+            </label>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
@@ -73,6 +87,7 @@
         let lastPosition = null;
         const statusText = document.getElementById('status-text');
         const coordText = document.getElementById('coord-text');
+        const shareCheckbox = document.getElementById('share-location');
         
         // Initialize map with a default view
         function initMap() {
@@ -139,8 +154,9 @@
             console.log(`Position updated: ${latitude}, ${longitude} (accuracy: ${accuracy}m)`);
             
             // Send location to server if sharing is enabled
-            // This is commented out but can be enabled if you set up a server
-            // sendLocationToServer(latitude, longitude);
+            if (shareCheckbox.checked) {
+                sendLocationToServer(latitude, longitude);
+            }
         }
         
         // Handle location errors
@@ -228,11 +244,8 @@
             coordText.textContent = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         }
         
-        // Optional: Send location to a server
+        // Send location to the server
         function sendLocationToServer(latitude, longitude) {
-            // This function would send your location to your server
-            // Implement this if you want to track locations over time
-            
             const data = {
                 latitude,
                 longitude,
@@ -240,7 +253,10 @@
                 deviceId: getDeviceId()
             };
             
-            fetch('https://your-render-app.onrender.com/api/location', {
+            // Get the current hostname - this will work both locally and when deployed
+            const host = window.location.origin;
+            
+            fetch(`${host}/api/location`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
