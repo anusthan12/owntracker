@@ -1,6 +1,6 @@
-// server.js
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -10,11 +10,13 @@ const locationHistory = {};
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // Serve static files
 
-// Routes
+// Serve static files directly from the root directory
+app.use(express.static(path.join(__dirname)));
+
+// Routes - serve index.html
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/public/index.html');
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // API endpoint to receive location updates
@@ -53,4 +55,5 @@ app.get('/api/location/:deviceId', (req, res) => {
 // Start the server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  console.log(`Open http://localhost:${port} in your browser`);
 });
