@@ -1,0 +1,276 @@
+// index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OwnTracker - Live Location</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        #header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 10px;
+            text-align: center;
+        }
+        #map {
+            flex-grow: 1;
+            width: 100%;
+        }
+        #status {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            padding: 8px 12px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            z-index: 1000;
+        }
+        #coordinates {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            padding: 8px 12px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 4px;
+            z-index: 1000;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="header">
+            <h1>OwnTracker</h1>
+        </div>
+        <div id="map"></div>
+        <div id="status">Status: <span id="status-text">Initializing...</span></div>
+        <div id="coordinates">Coordinates: <span id="coord-text">Waiting...</span></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script>
+        // Initialize variables
+        let map, marker, circle;
+        let watchId = null;
+        let lastPosition = null;
+        const statusText = document.getElementById('status-text');
+        const coordText = document.getElementById('coord-text');
+        
+        // Initialize map with a default view
+        function initMap() {
+            map = L.map('map').setView([0, 0], 2);
+            
+            // Use OpenStreetMap tiles which are free and don't require an API key
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 19
+            }).addTo(map);
+            
+            // Start tracking location
+            startTracking();
+        }
+        
+        // Start tracking the user's location
+        function startTracking() {
+            // Check if geolocation is supported
+            if (!navigator.geolocation) {
+                updateStatus('Geolocation is not supported by your browser', 'error');
+                return;
+            }
+            
+            updateStatus('Locating you...', 'normal');
+            
+            // Options for geolocation
+            const options = {
+                enableHighAccuracy: true,  // Request high accuracy
+                timeout: 10000,           // Time to wait for a position
+                maximumAge: 0             // Don't use a cached position
+            };
+            
+            try {
+                // Watch the user's position
+                watchId = navigator.geolocation.watchPosition(
+                    positionSuccess,
+                    positionError,
+                    options
+                );
+                
+                // Also try to get a single position immediately
+                navigator.geolocation.getCurrentPosition(
+                    positionSuccess,
+                    positionError,
+                    options
+                );
+            } catch (e) {
+                updateStatus('Error starting location tracking: ' + e.message, 'error');
+            }
+        }
+        
+        // Handle successful location retrieval
+        function positionSuccess(position) {
+            const { latitude, longitude, accuracy } = position.coords;
+            lastPosition = { latitude, longitude, accuracy };
+            
+            updateStatus('Location found', 'success');
+            updateCoordinates(latitude, longitude);
+            
+            // Update the map with the new position
+            updateMap(latitude, longitude, accuracy);
+            
+            // Log position to console - useful for debugging
+            console.log(`Position updated: ${latitude}, ${longitude} (accuracy: ${accuracy}m)`);
+            
+            // Send location to server if sharing is enabled
+            // This is commented out but can be enabled if you set up a server
+            // sendLocationToServer(latitude, longitude);
+        }
+        
+        // Handle location errors
+        function positionError(error) {
+            let errorMessage;
+            
+            switch (error.code) {
+                case error.PERMISSION_DENIED:
+                    errorMessage = "Location access denied. Please enable location permissions.";
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    errorMessage = "Location information unavailable. Try again later.";
+                    break;
+                case error.TIMEOUT:
+                    errorMessage = "Location request timed out. Using fallback method...";
+                    // Try fallback method for location using IP geolocation
+                    useIpFallback();
+                    break;
+                default:
+                    errorMessage = `Location error (${error.code}): ${error.message}`;
+            }
+            
+            updateStatus(errorMessage, 'error');
+            console.warn(errorMessage);
+        }
+        
+        // IP-based geolocation fallback when GPS fails
+        function useIpFallback() {
+            // Using a free IP geolocation service that doesn't require API keys
+            fetch('https://ipapi.co/json/')
+                .then(response => {
+                    if (!response.ok) throw new Error('Network response failed');
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.latitude && data.longitude) {
+                        updateStatus('Using approximate location from IP address', 'normal');
+                        updateMap(data.latitude, data.longitude, 5000); // 5km accuracy estimate
+                        updateCoordinates(data.latitude, data.longitude);
+                    }
+                })
+                .catch(error => {
+                    updateStatus('Failed to get location: ' + error.message, 'error');
+                    console.error('IP Geolocation Error:', error);
+                });
+        }
+        
+        // Update the map with the user's position
+        function updateMap(latitude, longitude, accuracy) {
+            // If this is the first position update, center the map
+            if (!map) return;
+            
+            // Center the map on the new position
+            map.setView([latitude, longitude], 16);
+            
+            // Create or update the marker
+            if (!marker) {
+                marker = L.marker([latitude, longitude]).addTo(map);
+            } else {
+                marker.setLatLng([latitude, longitude]);
+            }
+            
+            // Create or update the accuracy circle
+            if (!circle) {
+                circle = L.circle([latitude, longitude], {
+                    radius: accuracy,
+                    color: '#3388ff',
+                    fillColor: '#3388ff',
+                    fillOpacity: 0.2
+                }).addTo(map);
+            } else {
+                circle.setLatLng([latitude, longitude]);
+                circle.setRadius(accuracy);
+            }
+        }
+        
+        // Update the status display
+        function updateStatus(message, type) {
+            statusText.textContent = message;
+            statusText.className = type || '';
+        }
+        
+        // Update the coordinates display
+        function updateCoordinates(latitude, longitude) {
+            coordText.textContent = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+        }
+        
+        // Optional: Send location to a server
+        function sendLocationToServer(latitude, longitude) {
+            // This function would send your location to your server
+            // Implement this if you want to track locations over time
+            
+            const data = {
+                latitude,
+                longitude,
+                timestamp: new Date().toISOString(),
+                deviceId: getDeviceId()
+            };
+            
+            fetch('https://your-render-app.onrender.com/api/location', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => console.log('Location sent to server:', data))
+            .catch(error => console.error('Error sending location:', error));
+        }
+        
+        // Generate a persistent device ID
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('deviceId');
+            if (!deviceId) {
+                deviceId = 'device_' + Math.random().toString(36).substring(2, 15);
+                localStorage.setItem('deviceId', deviceId);
+            }
+            return deviceId;
+        }
+        
+        // Clean up when the page is closed
+        window.onbeforeunload = function() {
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+            }
+        };
+        
+        // Initialize the map when the page loads
+        window.onload = initMap;
+    </script>
+</body>
+</html>
