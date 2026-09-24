@@ -87,7 +87,7 @@
         </div>
         <div id="map"></div>
         <div class="info-box">
-            <a href="/viewer">View All Devices</a>
+            <a href="/viewer">View All Devices</a> | <a href="/3d">3D Path</a>
             <div id="device-info">Device ID: <span id="device-id">generating...</span></div>
         </div>
         <div id="controls">
@@ -180,6 +180,7 @@
                     trackBtn.textContent = 'Stop Tracking';
                     updateBtn.disabled = false;
                     statusElement.textContent = 'Tracking your location...';
+                    if ('wakeLock' in navigator) { navigator.wakeLock.request('screen').then(l => { window._wl = l; }).catch(() => {}); }
                 } else {
                     statusElement.textContent = 'Geolocation is not supported by this browser.';
                 }
@@ -190,12 +191,13 @@
                 trackBtn.textContent = 'Start Tracking';
                 updateBtn.disabled = true;
                 statusElement.textContent = 'Location tracking stopped';
+                if (window._wl) { window._wl.release(); window._wl = null; }
             }
         }
 
         // Handle successful position acquisition
         function handlePositionSuccess(position) {
-            const { latitude, longitude, accuracy } = position.coords;
+            const { latitude, longitude, accuracy, altitude, altitudeAccuracy, speed, heading } = position.coords;
             const timestamp = new Date().toISOString();
             
             currentPosition = {
@@ -209,13 +211,14 @@
             updateMap(currentPosition);
             
             // Send to server
+            Object.assign(currentPosition, { altitude, altitudeAccuracy, speed, heading });
             sendLocationToServer(currentPosition);
             
             // Update display
             document.getElementById('lat').textContent = latitude.toFixed(6);
             document.getElementById('lng').textContent = longitude.toFixed(6);
             document.getElementById('accuracy').textContent = accuracy.toFixed(1);
-            document.getElementById('status').textContent = 'Location updated at ' + new Date().toLocaleTimeString();
+            document.getElementById('status').textContent = 'Location updated at ' + new Date().toLocaleTimeString() + (altitude != null ? ' | Alt ' + altitude.toFixed(1) + ' m' : ' | no altitude');
             
             // Store locally
             localStorage.setItem('owntracker-last-position', JSON.stringify(currentPosition));

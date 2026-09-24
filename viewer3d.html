@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OwnTracker - 3D Path</title>
+<style>
+  :root { --bg:#0f1720; --panel:#17212c; --line:#2b394a; --text:#e6edf3; --muted:#93a4b5; --accent:#f2b544; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  #scene { position:fixed; inset:0 340px 0 0; }
+  #panel { position:fixed; top:0; right:0; bottom:0; width:340px; overflow-y:auto; background:var(--panel); border-left:1px solid var(--line); padding:14px; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  h2 { font-size:14px; margin:18px 0 8px; padding-top:12px; border-top:1px solid var(--line); }
+  a { color:var(--accent); }
+  label { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:6px 0; color:var(--muted); }
+  input[type=number], select { width:120px; padding:5px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:4px; }
+  select#device { width:100%; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  button { padding:8px 12px; margin:4px 4px 0 0; background:var(--accent); color:#1b1400; border:0; border-radius:4px; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #stats, #events, #now { font-size:13px; color:var(--muted); }
+  #events { max-height:150px; overflow-y:auto; }
+  #now { color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:6px 8px; min-height:52px; }
+  .warn { color:#ff9c7a; }
+  @media (max-width:800px) {
+    #scene { inset:0 0 45% 0; }
+    #panel { top:auto; height:45%; width:100%; border-left:0; border-top:1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<aside id="panel">
+  <h1>3D path</h1>
+  <div><a href="/viewer">2D map</a> &middot; <a href="/">My location</a></div>
+
+  <h2>Device</h2>
+  <select id="device"></select>
+  <label><span>Auto refresh (15 s)</span><input type="checkbox" id="auto"></label>
+  <div id="stats">Loading...</div>
+
+  <h2>Height and floors</h2>
+  <label>Height source
+    <select id="src"><option value="auto">Auto (barometer if present)</option><option value="baro">Barometer only</option><option value="gps">GPS only</option></select>
+  </label>
+  <label>Floor height (m)<input type="number" id="fh" value="3.2" step="0.1" min="1"></label>
+  <label>Start floor number<input type="number" id="g0" value="0" step="1"></label>
+  <label>Ignore points worse than (m)<input type="number" id="acc" value="50" step="5" min="1"></label>
+  <label>Height exaggeration in view <span id="vexv">3x</span></label>
+  <input type="range" id="vex" min="1" max="10" step="0.5" value="3">
+
+  <h2>Replay</h2>
+  <input type="range" id="tl" min="0" max="0" value="0">
+  <div id="now">-</div>
+  <button id="play">Play</button><button class="ghost" id="reset">Reset view</button>
+
+  <h2>Floor changes (stairs / lift)</h2>
+  <div id="events">-</div>
+
+  <h2>3D print (STL)</h2>
+  <label>Model width (mm)<input type="number" id="mm" value="150" min="30"></label>
+  <label>Path thickness (mm)<input type="number" id="thick" value="2.4" step="0.2" min="1"></label>
+  <label>Height exaggeration in print<input type="number" id="pex" value="1" step="0.5" min="1"></label>
+  <label><span>Support posts + base plate</span><input type="checkbox" id="posts" checked></label>
+  <button id="stl">Download STL</button><button class="ghost" id="csv">Download CSV</button>
+  <div id="stlinfo" style="font-size:12px;color:var(--muted);margin-top:6px">The wide post marks the start. Z is up.</div>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let raw = [], pts = [], events = [], dev = new URLSearchParams(location.search).get('device') || '';
+let fitted = null, marker, playTimer = null, extent = 10;
+
+/* ---------- Three.js scene ---------- */
+const box = $('scene');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+box.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1720);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100000);
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+const group = new THREE.Group();
+scene.add(group);
+scene.add(new THREE.AmbientLight(0xffffff, 1));
+function resize() {
+  renderer.setSize(box.clientWidth, box.clientHeight);
+  camera.aspect = box.clientWidth / box.clientHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+(function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+
+function floorColor(f) { return new THREE.Color().setHSL((((f * 0.17) % 1) + 1) % 1, 0.85, 0.58); }
+function label(txt, w) {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,0,0,.65)'; g.fillRect(0, 0, 256, 64);
+  g.fillStyle = '#fff'; g.font = '30px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(txt, 128, 32);
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  s.scale.set(w, w / 4, 1);
+  return s;
+}
+
+/* ---------- Data ---------- */
+async function loadDevices() {
+  const list = await (await fetch('/api/devices')).json();
+  $('device').innerHTML = list.map(d => `<option value="${d.id}">${d.id} (${d.points} pts)</option>`).join('');
+  if (!dev && list.length) dev = list[0].id;
+  if (dev) $('device').value = dev;
+  if (!list.length) $('stats').textContent = 'No devices yet. Start tracking from a phone first.';
+}
+async function loadTrack() {
+  if (!dev) return;
+  raw = await (await fetch('/api/location/' + encodeURIComponent(dev))).json();
+  processTrack();
+  draw(fitted !== dev);
+  fitted = dev;
+}
+
+const median = a => { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+function smooth(arr) {
+  const med = arr.map((_, i) => median(arr.slice(Math.max(0, i - 2), i + 3)));
+  return med.map((_, i) => { const w = med.slice(Math.max(0, i - 1), i + 2); return w.reduce((a, b) => a + b, 0) / w.length; });
+}
+
+function processTrack() {
+  const maxAcc = +$('acc').value, fh = +$('fh').value, g0 = +$('g0').value, src = $('src').value;
+  const p = raw.filter(r => r.accuracy == null || r.accuracy <= maxAcc);
+  pts = []; events = [];
+  if (!p.length) return;
+
+  const lat0 = p[0].latitude, lon0 = p[0].longitude;
+  const kx = 111320 * Math.cos(lat0 * Math.PI / 180), ky = 110540;
+
+  const baroCount = p.filter(r => r.baroAltitude != null).length;
+  const useBaro = src === 'baro' || (src === 'auto' && baroCount >= p.length / 2);
+  let last = null, hasAlt = false;
+  const alt = p.map(r => {
+    let v = useBaro ? r.baroAltitude : r.altitude;
+    if (v == null) v = last; else { last = v; hasAlt = true; }
+    return v;
+  });
+  const first = alt.find(v => v != null);
+  const filled = alt.map(v => v == null ? (first ?? 0) : v);
+  const sm = smooth(filled);
+  const base = median(sm.slice(0, 5));
+
+  let cur = 0;
+  p.forEach((r, i) => {
+    const z = hasAlt ? sm[i] - base : 0;
+    if (Math.abs(z - cur * fh) > 0.65 * fh) cur = Math.round(z / fh); // hysteresis: avoids flicker between floors
+    pts.push({ x: (r.longitude - lon0) * kx, y: (r.latitude - lat0) * ky, z, floor: cur + g0, t: r.timestamp, acc: r.accuracy, lat: r.latitude, lon: r.longitude });
+  });
+  pts.hasAlt = hasAlt; pts.source = useBaro ? 'barometer' : 'GPS';
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].floor !== pts[i - 1].floor)
+      events.push(`${new Date(pts[i].t).toLocaleTimeString()}: floor ${pts[i - 1].floor} to ${pts[i].floor}`);
+  }
+}
+
+/* ---------- Drawing ---------- */
+function draw(fit) {
+  group.clear();
+  $('tl').max = Math.max(0, pts.length - 1);
+  if (!pts.length) { $('stats').textContent = `${raw.length} points, none usable. Try a higher accuracy limit.`; $('events').textContent = '-'; return; }
+
+  const fh = +$('fh').value, g0 = +$('g0').value, ve = +$('vex').value;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y), zs = pts.map(p => p.z);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+  extent = Math.max(maxX - minX, maxY - minY, (maxZ - minZ) * ve, 10);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const toScene = p => [p.x - cx, p.z * ve, -(p.y - cy)];
+
+  const pos = new Float32Array(pts.length * 3), col = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => {
+    pos.set(toScene(p), i * 3);
+    const c = floorColor(p.floor); col.set([c.r, c.g, c.b], i * 3);
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  group.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ vertexColors: true })));
+  group.add(new THREE.Points(geo, new THREE.PointsMaterial({ size: 5, sizeAttenuation: false, vertexColors: true })));
+
+  // floor planes
+  const k0 = Math.floor(minZ / fh), k1 = Math.ceil(maxZ / fh);
+  if (k1 - k0 <= 30) {
+    for (let k = k0; k <= k1; k++) {
+      const plane = new THREE.Mesh(
+        new THREE.PlaneGeometry(maxX - minX + extent * 0.3, maxY - minY + extent * 0.3),
+        new THREE.MeshBasicMaterial({ color: floorColor(k + g0), transparent: true, opacity: 0.09, side: THREE.DoubleSide, depthWrite: false }));
+      plane.rotation.x = -Math.PI / 2;
+      plane.position.set(0, k * fh * ve, 0);
+      group.add(plane);
+      const lb = label('Floor ' + (k + g0), extent * 0.16);
+      lb.position.set(-(maxX - minX) / 2 - extent * 0.12, k * fh * ve, (maxY - minY) / 2 + extent * 0.12);
+      group.add(lb);
+    }
+  }
+
+  const r = extent / 70;
+  const s = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0x38d67a }));
+  s.position.set(...toScene(pts[0])); group.add(s);
+  const e = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff5a4f }));
+  e.position.set(...toScene(pts[pts.length - 1])); group.add(e);
+  marker = new THREE.Mesh(new THREE.SphereGeometry(r * 1.4, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffe14d }));
+  group.add(marker);
+  group.userData.toScene = toScene;
+  showAt(Math.min(+$('tl').value, pts.length - 1));
+
+  if (fit) resetView();
+
+  let dist = 0;
+  for (let i = 1; i < pts.length; i++) dist += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  const floors = [...new Set(pts.map(p => p.floor))].sort((a, b) => a - b);
+  const dur = (new Date(pts[pts.length - 1].t) - new Date(pts[0].t)) / 60000;
+  $('stats').innerHTML = `${pts.length} of ${raw.length} points used<br>Distance ${dist.toFixed(0)} m, ${dur.toFixed(1)} min<br>` +
+    (pts.hasAlt ? `Height range ${(maxZ - minZ).toFixed(1)} m (${pts.source})<br>Floors seen: ${floors.join(', ')}`
+                : '<span class="warn">No altitude data received. The path is flat.</span>');
+  $('events').textContent = events.length ? '' : 'No floor changes detected';
+  events.forEach(t => { const d = document.createElement('div'); d.textContent = t; $('events').appendChild(d); });
+}
+
+function resetView() {
+  camera.position.set(extent * 0.9, extent * 0.8, extent * 0.9);
+  controls.target.set(0, 0, 0);
+  camera.far = extent * 50; camera.updateProjectionMatrix();
+}
+
+function showAt(i) {
+  const p = pts[i]; if (!p || !marker) return;
+  marker.position.set(...group.userData.toScene(p));
+  $('now').innerHTML = `${new Date(p.t).toLocaleString()}<br>Floor ${p.floor}, height ${p.z.toFixed(1)} m from start` +
+    (p.acc != null ? `, accuracy ${p.acc.toFixed(0)} m` : '');
+}
+
+/* ---------- Controls ---------- */
+$('tl').addEventListener('input', e => showAt(+e.target.value));
+$('play').addEventListener('click', () => {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; $('play').textContent = 'Play'; return; }
+  if (+$('tl').value >= pts.length - 1) $('tl').value = 0;
+  $('play').textContent = 'Pause';
+  playTimer = setInterval(() => {
+    const step = Math.max(1, Math.ceil(pts.length / 300));
+    const v = Math.min(pts.length - 1, +$('tl').value + step);
+    $('tl').value = v; showAt(v);
+    if (v >= pts.length - 1) { clearInterval(playTimer); playTimer = null; $('play').textContent = 'Play'; }
+  }, 50);
+});
+$('reset').addEventListener('click', resetView);
+$('device').addEventListener('change', e => { dev = e.target.value; loadTrack(); });
+$('vex').addEventListener('input', () => { $('vexv').textContent = $('vex').value + 'x'; draw(false); });
+['src', 'fh', 'g0', 'acc'].forEach(id => $(id).addEventListener('change', () => { processTrack(); draw(false); }));
+setInterval(() => { if ($('auto').checked) loadTrack(); }, 15000);
+
+/* ---------- Downloads ---------- */
+function download(name, data, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([data], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$('csv').addEventListener('click', () => {
+  const rows = ['time,latitude,longitude,x_east_m,y_north_m,height_m,floor,accuracy_m'];
+  pts.forEach(p => rows.push([p.t, p.lat, p.lon, p.x.toFixed(2), p.y.toFixed(2), p.z.toFixed(2), p.floor, p.acc ?? ''].join(',')));
+  download(`path-${dev}.csv`, rows.join('\n'), 'text/csv');
+});
+
+/* ---------- STL builder (Z up, millimetres) ---------- */
+const V = {
+  sub: (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
+  mul: (a, k) => [a[0] * k, a[1] * k, a[2] * k],
+  dot: (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  cross: (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  norm: a => { const l = Math.hypot(...a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+};
+
+function buildSTL() {
+  if (pts.length < 2) throw new Error('Need at least 2 points');
+  const width = +$('mm').value, r = +$('thick').value / 2, pex = +$('pex').value, withPosts = $('posts').checked;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y), zs = pts.map(p => p.z);
+  const minX = Math.min(...xs), minY = Math.min(...ys), minZ = Math.min(...zs);
+  const ext = Math.max(Math.max(...xs) - minX, Math.max(...ys) - minY, 5); // metres
+  const s = width / ext;                  // mm per metre
+  const m = r + 3, bt = withPosts ? 2 : 0; // margin, base thickness
+
+  // convert to mm and thin out points closer than 1.5 radius
+  let P = [];
+  pts.forEach((p, i) => {
+    const q = [(p.x - minX) * s + m, (p.y - minY) * s + m, bt + r + (p.z - minZ) * s * pex];
+    const l = P[P.length - 1];
+    if (!l || Math.hypot(...V.sub(q, l)) > r * 1.5 || i === pts.length - 1) P.push(q);
+  });
+  if (P.length < 2) P.push(V.add(P[0], [r * 2, 0, 0]));
+
+  const tris = [];
+  const tri = (a, b, c) => tris.push(a, b, c);
+
+  // path tube: hexagonal cross-section, parallel-transport frames
+  const T = P.map((_, i) => V.norm(V.sub(P[Math.min(P.length - 1, i + 1)], P[Math.max(0, i - 1)])));
+  let ref = Math.abs(T[0][2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  let N = V.norm(V.cross(ref, T[0]));
+  const SIDES = 6, rings = [];
+  P.forEach((c, i) => {
+    if (i > 0) N = V.norm(V.sub(N, V.mul(T[i], V.dot(N, T[i]))));
+    const B = V.cross(T[i], N);
+    const ring = [];
+    for (let j = 0; j < SIDES; j++) {
+      const a = (j / SIDES) * 2 * Math.PI;
+      ring.push(V.add(c, V.add(V.mul(N, r * Math.cos(a)), V.mul(B, r * Math.sin(a)))));
+    }
+    rings.push(ring);
+  });
+  for (let i = 0; i < rings.length - 1; i++)
+    for (let j = 0; j < SIDES; j++) {
+      const j2 = (j + 1) % SIDES;
+      tri(rings[i][j], rings[i + 1][j2], rings[i + 1][j]);
+      tri(rings[i][j], rings[i][j2], rings[i + 1][j2]);
+    }
+  for (let j = 0; j < SIDES; j++) {
+    const j2 = (j + 1) % SIDES;
+    tri(P[0], rings[0][j2], rings[0][j]);
+    const L = P.length - 1;
+    tri(P[L], rings[L][j], rings[L][j2]);
+  }
+
+  // axis-aligned box with outward-facing triangles
+  const boxTris = (x0, y0, z0, x1, y1, z1) => {
+    const q = (a, b, c, d) => { tri(a, b, c); tri(a, c, d); };
+    q([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]);
+    q([x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]);
+    q([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]);
+    q([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]);
+    q([x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]);
+    q([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]);
+  };
+
+  let W = 0, D = 0;
+  if (withPosts) {
+    W = Math.max(...P.map(p => p[0])) + m; D = Math.max(...P.map(p => p[1])) + m;
+    boxTris(0, 0, 0, W, D, bt);
+    const hw = Math.max(r * 0.6, 0.6);
+    let lastPost = null;
+    P.forEach((p, i) => {
+      if (i === 0) { const w = r * 2.5; boxTris(p[0] - w, p[1] - w, bt, p[0] + w, p[1] + w, Math.max(p[2], bt + 1)); lastPost = p; return; }
+      if (p[2] - bt > 0.8 && Math.hypot(p[0] - lastPost[0], p[1] - lastPost[1]) > 10) {
+        boxTris(p[0] - hw, p[1] - hw, bt, p[0] + hw, p[1] + hw, p[2]); lastPost = p;
+      }
+    });
+  }
+
+  // binary STL
+  const buf = new ArrayBuffer(84 + (tris.length / 3) * 50);
+  const dv = new DataView(buf);
+  dv.setUint32(80, tris.length / 3, true);
+  let o = 84;
+  for (let i = 0; i < tris.length; i += 3) {
+    const a = tris[i], b = tris[i + 1], c = tris[i + 2];
+    const n = V.norm(V.cross(V.sub(b, a), V.sub(c, a)));
+    [n, a, b, c].forEach(v => v.forEach(f => { dv.setFloat32(o, f, true); o += 4; }));
+    dv.setUint16(o, 0, true); o += 2;
+  }
+  const maxZ = Math.max(...P.map(p => p[2])) + r;
+  const dims = withPosts ? `${W.toFixed(0)} x ${D.toFixed(0)} x ${maxZ.toFixed(0)} mm` : `about ${width} mm wide`;
+  return { buf, count: tris.length / 3, dims, s };
+}
+
+$('stl').addEventListener('click', () => {
+  try {
+    const out = buildSTL();
+    download(`path-${dev}.stl`, out.buf, 'model/stl');
+    $('stlinfo').textContent = `${out.count.toLocaleString()} triangles, ${out.dims}. Scale: 1 m real = ${out.s.toFixed(2)} mm.`;
+  } catch (err) { $('stlinfo').textContent = err.message; }
+});
+
+loadDevices().then(loadTrack);
+</script>
+</body>
+</html>

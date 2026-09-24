@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OwnTracker - All Devices</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<style>
+  html, body { margin:0; height:100%; font-family: Arial, sans-serif; }
+  #header { background:#2c3e50; color:#fff; padding:10px 14px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  #header h1 { font-size:18px; margin:0; }
+  #header a { color:#8fd0ff; }
+  #map { height:calc(100% - 46px); }
+  select { padding:5px; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>OwnTracker - Device Viewer</h1>
+  <select id="device"></select>
+  <a href="/">My location</a>
+  <a id="link3d" href="/3d">Open in 3D</a>
+  <span id="info"></span>
+</div>
+<div id="map"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+const map = L.map('map').setView([0, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors', maxZoom: 19 }).addTo(map);
+const sel = document.getElementById('device');
+let layer = L.layerGroup().addTo(map), fitted = null;
+
+async function loadDevices() {
+  const devices = await (await fetch('/api/devices')).json();
+  const current = sel.value;
+  sel.innerHTML = devices.map(d => `<option value="${d.id}">${d.id} (${d.points} pts, ${d.lastSeen})</option>`).join('');
+  if (current && devices.some(d => d.id === current)) sel.value = current;
+  if (!devices.length) document.getElementById('info').textContent = 'No devices yet. Start tracking from a phone first.';
+}
+
+async function loadTrack() {
+  if (!sel.value) return;
+  document.getElementById('link3d').href = '/3d?device=' + encodeURIComponent(sel.value);
+  const list = await (await fetch('/api/location/' + encodeURIComponent(sel.value))).json();
+  layer.clearLayers();
+  if (!list.length) return;
+  const pts = list.map(p => [p.latitude, p.longitude]);
+  L.polyline(pts, { color: 'red', weight: 3 }).addTo(layer);
+  const last = list[list.length - 1];
+  L.circleMarker(pts[0], { radius: 7, color: '#1a9850', fillOpacity: 1 }).bindPopup('Start').addTo(layer);
+  L.marker(pts[pts.length - 1]).bindPopup('Last: ' + new Date(last.timestamp).toLocaleString()).addTo(layer);
+  if (last.accuracy) L.circle(pts[pts.length - 1], { radius: last.accuracy, color: '#3388ff', fillOpacity: 0.2 }).addTo(layer);
+  if (fitted !== sel.value) { map.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 18 }); fitted = sel.value; }
+}
+
+sel.addEventListener('change', loadTrack);
+(async () => { await loadDevices(); await loadTrack(); })();
+setInterval(async () => { await loadDevices(); await loadTrack(); }, 15000);
+</script>
+</body>
+</html>
