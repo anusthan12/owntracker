@@ -87,7 +87,7 @@
         </div>
         <div id="map"></div>
         <div class="info-box">
-            <a href="/viewer">View All Devices</a> | <a href="/3d">3D Path</a>
+            <a href="/viewer">View All Devices</a> | <a href="/3d">3D Path</a><br><a href="#" id="fit-all">Zoom to all devices</a> <span id="device-count"></span>
             <div id="device-info">Device ID: <span id="device-id">generating...</span></div>
         </div>
         <div id="controls">
@@ -298,7 +298,7 @@
             // If the map view is far from the current position, center it
             const mapCenter = map.getCenter();
             const distance = map.distance(mapCenter, [latitude, longitude]);
-            if (distance > 500) { // If more than 500 meters away
+            if (distance > 500 && !window._freeView) { // If more than 500 meters away
                 map.setView([latitude, longitude], map.getZoom());
             }
             
@@ -338,12 +338,13 @@
             try {
                 if (!othersLayer) othersLayer = L.layerGroup().addTo(map);
                 const devices = await (await fetch(window.location.origin + '/api/devices')).json();
-                const layer = L.layerGroup();
+                const layer = L.layerGroup(); const all = [];
                 for (const d of devices) {
                     const list = await (await fetch(window.location.origin + '/api/location/' + encodeURIComponent(d.id))).json();
                     if (!list.length) continue;
                     const color = deviceColor(d.id);
                     const pts = list.map(p => [p.latitude, p.longitude]);
+                    all.push(...pts);
                     L.polyline(pts, { color, weight: 3, opacity: 0.85 }).addTo(layer);
                     if (d.id === deviceId) continue; // own marker is drawn by updateMap
                     const last = list[list.length - 1];
@@ -354,10 +355,12 @@
                 }
                 othersLayer.clearLayers();
                 layer.addTo(othersLayer);
+                window._allPts = all;
+                const dc = document.getElementById('device-count'); if (dc) dc.textContent = '(' + devices.length + ' on server)';
             } catch (e) { console.error('Error loading other devices:', e); }
         }
 
-        window.onload = () => { initMap(); loadOthers(); setInterval(loadOthers, 10000); };
+        window.onload = () => { initMap(); document.getElementById('fit-all').addEventListener('click', e => { e.preventDefault(); window._freeView = true; if (window._allPts && window._allPts.length) map.fitBounds(L.latLngBounds(window._allPts).pad(0.2), { maxZoom: 18 }); }); loadOthers(); setInterval(loadOthers, 10000); };
     </script>
 </body>
 </html>
