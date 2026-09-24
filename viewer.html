@@ -45,7 +45,8 @@ async function refresh() {
   layer.clearLayers(); bounds = {};
   const list = document.getElementById('list');
   list.innerHTML = devices.length ? '' : 'No devices yet. Start tracking from a phone or laptop.';
-  document.getElementById('info').textContent = devices.length + ' device(s)';
+  const h = await (await fetch('/api/health')).json();
+  document.getElementById('info').textContent = devices.length + ' device(s), server ' + h.instance + ', ' + location.host;
   for (const d of devices) {
     const pts = (await (await fetch('/api/location/' + encodeURIComponent(d.id))).json());
     if (!pts.length) continue;

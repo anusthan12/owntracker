@@ -29,6 +29,15 @@ function scheduleSave() {
 
 app.use(cors());
 app.use(express.json({ limit: '100kb' }));
+app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+
+// Tells you which server instance answered. Two devices must show the same id to share data.
+const INSTANCE = Math.random().toString(36).slice(2, 8);
+const STARTED = new Date().toISOString();
+app.get('/api/health', (req, res) => {
+  const ids = Object.keys(locationHistory);
+  res.json({ instance: INSTANCE, startedAt: STARTED, devices: ids.length, points: ids.reduce((n, id) => n + locationHistory[id].length, 0) });
+});
 
 const num = v => {
   if (v === null || v === undefined || v === '') return null;

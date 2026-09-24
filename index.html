@@ -356,7 +356,8 @@
                 othersLayer.clearLayers();
                 layer.addTo(othersLayer);
                 window._allPts = all;
-                const dc = document.getElementById('device-count'); if (dc) dc.textContent = '(' + devices.length + ' on server)';
+                const h = await (await fetch(window.location.origin + '/api/health')).json();
+                const dc = document.getElementById('device-count'); if (dc) dc.textContent = '(' + devices.length + ' device(s), server ' + h.instance + ', ' + location.host + ')';
             } catch (e) { console.error('Error loading other devices:', e); }
         }
 
