@@ -130,3 +130,21 @@ This tool is intended for **authorized monitoring only** — such as personal de
 <div align="center">
   <p>Built and maintained by <a href="https://github.com/anusthan12"><strong>Anusthan Singh</strong></a> &nbsp;•&nbsp; © 2025</p>
 </div>
+
+## URLs
+
+Base: `https://owntracker-1.onrender.com`
+
+Use the same address on every device.
+
+**Pages**
+- Track location: `https://owntracker-1.onrender.com/`
+- All devices map: `https://owntracker-1.onrender.com/viewer`
+- 3D path and STL export: `https://owntracker-1.onrender.com/3d`
+- 3D path for one device: `https://owntracker-1.onrender.com/3d?device=<device-id>`
+
+**API**
+- Device list: `https://owntracker-1.onrender.com/api/devices`
+- Server check: `https://owntracker-1.onrender.com/api/health`
+- One device's points: `https://owntracker-1.onrender.com/api/location/<device-id>`
+- GeoJSON export: `https://owntracker-1.onrender.com/api/export/<device-id>.geojson`
