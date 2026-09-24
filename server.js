@@ -109,6 +109,23 @@ app.get('/api/export/:deviceId.geojson', (req, res) => {
   });
 });
 
+// Clearing records. If ADMIN_KEY is set in Render's environment, clearing needs that key.
+const ADMIN_KEY = process.env.ADMIN_KEY || '';
+const requireAdmin = (req, res, next) => {
+  if (ADMIN_KEY && req.get('x-admin-key') !== ADMIN_KEY) return res.status(401).json({ error: 'Admin key required' });
+  next();
+};
+app.delete('/api/location/:deviceId', requireAdmin, (req, res) => {
+  delete locationHistory[req.params.deviceId];
+  scheduleSave();
+  res.json({ success: true });
+});
+app.delete('/api/location', requireAdmin, (req, res) => {
+  locationHistory = {};
+  scheduleSave();
+  res.json({ success: true });
+});
+
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
   console.log(`2D map: http://localhost:${port}/viewer   3D: http://localhost:${port}/3d`);

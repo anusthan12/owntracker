@@ -331,7 +331,33 @@
         }
 
         // Initialize the map when the page loads
-        window.onload = initMap;
+        // Show every device (own path + other devices' latest position and path)
+        let othersLayer = null;
+        const deviceColor = id => { let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h},75%,42%)`; };
+        async function loadOthers() {
+            try {
+                if (!othersLayer) othersLayer = L.layerGroup().addTo(map);
+                const devices = await (await fetch(window.location.origin + '/api/devices')).json();
+                const layer = L.layerGroup();
+                for (const d of devices) {
+                    const list = await (await fetch(window.location.origin + '/api/location/' + encodeURIComponent(d.id))).json();
+                    if (!list.length) continue;
+                    const color = deviceColor(d.id);
+                    const pts = list.map(p => [p.latitude, p.longitude]);
+                    L.polyline(pts, { color, weight: 3, opacity: 0.85 }).addTo(layer);
+                    if (d.id === deviceId) continue; // own marker is drawn by updateMap
+                    const last = list[list.length - 1];
+                    L.circleMarker(pts[pts.length - 1], { radius: 8, color, fillColor: color, fillOpacity: 1 })
+                        .bindTooltip(d.id.replace(/^device-\d+-/, ''), { permanent: true, direction: 'top' })
+                        .bindPopup('Device ' + d.id + '<br>Last update: ' + new Date(last.timestamp).toLocaleString())
+                        .addTo(layer);
+                }
+                othersLayer.clearLayers();
+                layer.addTo(othersLayer);
+            } catch (e) { console.error('Error loading other devices:', e); }
+        }
+
+        window.onload = () => { initMap(); loadOthers(); setInterval(loadOthers, 10000); };
     </script>
 </body>
 </html>
